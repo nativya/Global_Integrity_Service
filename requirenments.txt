@@ -1,0 +1,9 @@
+# Web framework for the API
+fastapi
+uvicorn[standard]
+
+# Asynchronous Redis client
+redis
+
+# Settings management
+pydantic-settings
