@@ -19,13 +19,14 @@ class UpstashRedisClient:
         self.headers = {"Authorization": f"Bearer {self.token}"}
 
     async def ping(self):
-        # Upstash does not have a direct PING, so use a simple GET command
+        # Use GET with no body for Upstash REST GET command
         async with httpx.AsyncClient() as client:
-            response = await client.post(
+            response = await client.get(
                 f"{self.base_url}/get/global_fingerprints",
-                headers=self.headers,
-                json={"key": "global_fingerprints"}
+                headers=self.headers
             )
+            if response.status_code != 200 and response.status_code != 404:
+                logger.error(f"Upstash Redis ping failed: {response.status_code} {response.text}")
             return response.status_code == 200 or response.status_code == 404
 
     async def sismember(self, key: str, member: str):
@@ -54,6 +55,12 @@ async def lifespan(app: FastAPI):
     Manages the application's lifespan events.
     Connects to Upstash Redis on startup.
     """
+    # --- .env file must provide UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN, API_KEY ---
+    if not settings.UPSTASH_REDIS_REST_URL or not settings.UPSTASH_REDIS_REST_TOKEN:
+        logger.error("Missing Upstash Redis environment variables. Check your .env file.")
+        app.state.redis = None
+        yield
+        return
     try:
         app.state.redis = UpstashRedisClient(
             base_url=settings.UPSTASH_REDIS_REST_URL,
@@ -63,7 +70,7 @@ async def lifespan(app: FastAPI):
         if connected:
             logger.info("Successfully connected to Upstash Redis.")
         else:
-            logger.error("Could not connect to Upstash Redis.")
+            logger.error("Could not connect to Upstash Redis (ping failed). Check credentials and endpoint.")
             app.state.redis = None
     except Exception as e:
         logger.error(f"Could not connect to Upstash Redis: {e}")

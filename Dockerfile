@@ -10,4 +10,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the rest of the application code
 COPY ./app /app/app
 
+# Expose the port used by Uvicorn
+EXPOSE 10000
+
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "10000"]
