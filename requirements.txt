@@ -7,3 +7,6 @@ redis
 
 # Settings management
 pydantic-settings
+
+# HTTP client
+httpx

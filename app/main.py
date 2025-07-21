@@ -1,5 +1,5 @@
 import logging
-import redis.asyncio as redis
+import httpx
 from fastapi import FastAPI, Depends, HTTPException, Security, status
 from fastapi.security import APIKeyHeader
 from contextlib import asynccontextmanager
@@ -11,33 +11,65 @@ from .models import UniquenessPayload, UniquenessResponse
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# --- Upstash Redis REST Client ---
+class UpstashRedisClient:
+    def __init__(self, base_url: str, token: str):
+        self.base_url = base_url.rstrip("/")
+        self.token = token
+        self.headers = {"Authorization": f"Bearer {self.token}"}
+
+    async def ping(self):
+        # Upstash does not have a direct PING, so use a simple GET command
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{self.base_url}/get/global_fingerprints",
+                headers=self.headers,
+                json={"key": "global_fingerprints"}
+            )
+            return response.status_code == 200 or response.status_code == 404
+
+    async def sismember(self, key: str, member: str):
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{self.base_url}/sismember/{key}/{member}",
+                headers=self.headers
+            )
+            if response.status_code == 200:
+                return response.json().get("result", 0) == 1
+            return False
+
+    async def sadd(self, key: str, *members):
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{self.base_url}/sadd/{key}",
+                headers=self.headers,
+                json={"members": list(members)}
+            )
+            return response.status_code == 200
 
 # --- Redis Connection Management ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
     Manages the application's lifespan events.
-    Connects to Redis on startup and disconnects on shutdown.
+    Connects to Upstash Redis on startup.
     """
     try:
-        app.state.redis = redis.Redis(
-            host=settings.REDIS_HOST,
-            port=settings.REDIS_PORT,
-            db=settings.REDIS_DB,
-            decode_responses=True
+        app.state.redis = UpstashRedisClient(
+            base_url=settings.UPSTASH_REDIS_REST_URL,
+            token=settings.UPSTASH_REDIS_REST_TOKEN
         )
-        await app.state.redis.ping()
-        logger.info("Successfully connected to Redis.")
-    except redis.exceptions.ConnectionError as e:
-        logger.error(f"Could not connect to Redis: {e}")
+        connected = await app.state.redis.ping()
+        if connected:
+            logger.info("Successfully connected to Upstash Redis.")
+        else:
+            logger.error("Could not connect to Upstash Redis.")
+            app.state.redis = None
+    except Exception as e:
+        logger.error(f"Could not connect to Upstash Redis: {e}")
         app.state.redis = None
-    
     yield
-    
-    if app.state.redis:
-        await app.state.redis.close()
-        logger.info("Redis connection closed.")
-
+    # No explicit close needed for Upstash REST
 
 # --- FastAPI App Initialization ---
 app = FastAPI(
@@ -87,7 +119,6 @@ async def health_check():
         raise HTTPException(status_code=503, detail="Redis service is unavailable")
     return {"status": "ok", "redis_connected": True}
 
-
 @app.post(
     "/validate-global-uniqueness",
     response_model=UniquenessResponse,
@@ -108,22 +139,19 @@ async def validate_global_uniqueness(payload: UniquenessPayload):
 
     fingerprints_to_check = payload.fingerprints
     total_fingerprints = len(fingerprints_to_check)
-    
-    # Use SISMEMBER to check for existence of multiple items in a set.
-    # This is more efficient than checking one by one.
-    # The command returns a list of 1s and 0s.
     redis_key = "global_fingerprints"
-    pipe = app.state.redis.pipeline()
+
+    # Check existence for each fingerprint
+    existence_results = []
     for fp in fingerprints_to_check:
-        pipe.sismember(redis_key, fp)
-    
-    existence_results = await pipe.execute() # [True, False, True, ...]
-    
+        exists = await app.state.redis.sismember(redis_key, fp)
+        existence_results.append(exists)
+
     duplicates_count = sum(existence_results)
     new_fingerprints = [
         fp for fp, exists in zip(fingerprints_to_check, existence_results) if not exists
     ]
-    
+
     # If there are new fingerprints, add them to the set using SADD
     if new_fingerprints:
         await app.state.redis.sadd(redis_key, *new_fingerprints)

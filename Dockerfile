@@ -1,22 +1,13 @@
-    # Use the official Python image.
-    FROM python:3.10-slim
+# Use the official Python image.
+FROM python:3.10-slim
 
-    # Set the working directory in the container
-    WORKDIR /app
+WORKDIR /app
 
-    # Install poetry for dependency management
-    RUN pip install poetry
+# Install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-    # Copy only the files needed for dependency installation
-    COPY poetry.lock pyproject.toml ./
+# Copy the rest of the application code
+COPY ./app /app/app
 
-    # Install dependencies without installing dev dependencies
-    RUN poetry config virtualenvs.create false && poetry install --no-dev
-
-    # Copy the rest of the application code
-    COPY ./app /app/app
-
-    # Command to run the application using uvicorn
-    # It will be accessible on port 8000
-    CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
-    
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "10000"]

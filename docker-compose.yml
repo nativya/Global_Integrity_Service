@@ -1,11 +1,13 @@
 version: "3.8"
 services:
-  redis:
-    image: "redis:alpine"
+  fastapi:
+    build: .
+    container_name: fastapi_app
     ports:
-      - "6379:6379"
+      - "8000:8000"
     volumes:
-      - redis_data:/data
-
-volumes:
-  redis_data:
+      - ./app:/app/app
+    environment:
+      - PYTHONUNBUFFERED=1
+    env_file:
+      - .env
